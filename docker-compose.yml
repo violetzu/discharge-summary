@@ -1,0 +1,81 @@
+services:
+
+  vllm-summary:
+    image: vllm/vllm-openai:latest
+    runtime: nvidia
+    restart: unless-stopped
+    ports:
+      - "8010:8010"
+    volumes:
+      - ${SUMMARY_MODEL_PATH:-./models/gemma-3n-privnurse-note-summary-v1}:/model:ro
+    command:
+      - "--model=/model"
+      - "--served-model-name=gemma-summary"
+      - "--port=8010"
+      - "--max-model-len=8192"
+      - "--gpu-memory-utilization=0.45"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8010/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
+
+  vllm-validation:
+    image: vllm/vllm-openai:latest
+    runtime: nvidia
+    restart: unless-stopped
+    ports:
+      - "8011:8011"
+    volumes:
+      - ${VALIDATION_MODEL_PATH:-./models/gemma-3n-privnurse-note-validation-v1}:/model:ro
+    command:
+      - "--model=/model"
+      - "--served-model-name=gemma-validation"
+      - "--port=8011"
+      - "--max-model-len=8192"
+      - "--gpu-memory-utilization=0.45"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8011/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
+
+  discharge-summary:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ./app:/app/app:ro
+    command: >
+      sh -c "pip install -q fastapi uvicorn[standard] aiohttp pydantic &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8001"
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      SUMMARY_BASE_URL: http://vllm-summary:8010
+      VALIDATION_BASE_URL: http://vllm-validation:8011
+      SUMMARY_MODEL: gemma-summary
+      VALIDATION_MODEL: gemma-validation
+    depends_on:
+      vllm-summary:
+        condition: service_healthy
+      vllm-validation:
+        condition: service_healthy
